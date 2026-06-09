@@ -154,37 +154,153 @@
       </g>
     </svg>
 
-    <div class="absolute top-3 left-3 right-3 flex items-start justify-between pointer-events-none z-10">
-      <div class="bg-slate-900/70 backdrop-blur px-3 py-2 rounded-lg border border-slate-700 pointer-events-auto">
-        <div class="text-[11px] text-slate-400">统计</div>
-        <div class="text-sm text-white font-semibold">
-          <span class="text-red-400">{{ stats.critical }}</span> ·
-          <span class="text-orange-400"> {{ stats.high }}</span> ·
-          <span class="text-yellow-400"> {{ stats.medium }}</span> ·
-          <span class="text-emerald-400"> {{ stats.low }}</span>
+    <Transition name="slide-up">
+      <div
+        v-if="store.urlState.showHistory"
+        class="absolute bottom-20 left-3 right-14 max-h-[45%] bg-slate-900/95 backdrop-blur rounded-xl border border-slate-700 z-20 overflow-hidden flex flex-col"
+        data-testid="nav-history-panel"
+      >
+        <div class="px-3 py-2 border-b border-slate-700 flex items-center justify-between shrink-0">
+          <div class="flex items-center gap-2">
+            <span class="text-xs text-slate-300 font-semibold">📜 布控热力图导航历史</span>
+            <span class="text-[10px] text-slate-500">共 {{ store.navigationHistory.length }} 条</span>
+          </div>
+          <div class="flex items-center gap-1.5">
+            <button
+              v-if="store.navigationHistory.length"
+              class="text-[10px] px-2 py-0.5 rounded border border-slate-600 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              @click="store.clearNavigationHistory()"
+            >清空</button>
+            <button
+              class="text-[10px] px-2 py-0.5 rounded border border-slate-600 text-slate-400 hover:bg-slate-800 hover:text-white transition"
+              @click="store.setShowHistory(false)"
+            >收起</button>
+          </div>
         </div>
-        <div class="text-[11px] text-slate-400 mt-1">
-          超时 <span class="text-red-400 font-semibold">{{ stats.overdue }}</span> ·
-          督导标记 <span class="text-purple-400 font-semibold">{{ stats.flagged }}</span>
+        <div class="flex-1 overflow-y-auto p-2 space-y-1.5">
+          <div
+            v-for="r in store.navigationHistory"
+            :key="r.id"
+            class="p-2 rounded-lg border cursor-pointer transition hover:bg-slate-800/80 group"
+            :class="[
+              r.reviewable
+                ? 'border-emerald-800 bg-emerald-950/30'
+                : 'border-slate-700 bg-slate-800/30'
+            ]"
+            @click="onHistoryClick(r.id)"
+            :data-testid="'nav-history-item-' + r.id.slice(-6)"
+          >
+            <div class="flex items-start justify-between gap-2">
+              <div class="flex items-center gap-1.5 min-w-0 flex-1">
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  :class="triggerBadgeClass(r.trigger)"
+                >{{ triggerLabel(r.trigger) }}</span>
+                <span
+                  class="text-[10px] px-1.5 py-0.5 rounded shrink-0"
+                  :class="r.targetType === 'event' ? 'bg-blue-900/60 text-blue-200 border border-blue-800' : 'bg-cyan-900/60 text-cyan-200 border border-cyan-800'"
+                >{{ r.targetType === 'event' ? '事件' : '网格' }}</span>
+                <span class="text-xs text-white font-medium truncate" :title="r.targetName">
+                  {{ r.targetName }}
+                </span>
+              </div>
+              <div class="text-right shrink-0">
+                <div class="text-[10px] text-slate-500">{{ formatTime(r.timestamp) }}</div>
+                <div class="text-[10px] text-slate-400">{{ r.operatorName }}</div>
+              </div>
+            </div>
+            <div class="mt-1 flex items-center gap-2 text-[10px] text-slate-400">
+              <span>📍 {{ r.gridName }}</span>
+              <span>ID: {{ r.targetId }}</span>
+              <span v-if="r.queryKeyword">🔎 {{ r.queryKeyword }}</span>
+            </div>
+            <div
+              v-if="r.reviewReason"
+              class="mt-1 text-[10px] leading-relaxed px-2 py-1 rounded"
+              :class="r.reviewable ? 'text-emerald-300 bg-emerald-950/50' : 'text-amber-300 bg-amber-950/30'"
+            >
+              <span v-if="r.reviewable" class="font-semibold">✅ 可复查：</span>
+              <span v-else class="font-semibold">⚠️：</span>
+              {{ r.reviewReason }}
+            </div>
+          </div>
+          <div
+            v-if="!store.navigationHistory.length"
+            class="text-center py-6 text-xs text-slate-500"
+          >暂无导航历史。使用搜索框定位网格或事件，或执行布控流程，记录会自动同步至此。</div>
         </div>
       </div>
-      <div class="flex gap-2 pointer-events-auto">
-        <button
-          v-for="vm in viewModes"
-          :key="vm.value"
-          class="px-2 py-1 text-xs rounded-md border transition"
+    </Transition>
+
+    <div class="absolute top-3 left-3 right-3 flex items-start justify-between pointer-events-none z-10">
+      <div class="flex flex-col gap-2 pointer-events-auto items-start">
+        <div class="bg-slate-900/70 backdrop-blur px-3 py-2 rounded-lg border border-slate-700">
+          <div class="text-[11px] text-slate-400">统计</div>
+          <div class="text-sm text-white font-semibold">
+            <span class="text-red-400">{{ stats.critical }}</span> ·
+            <span class="text-orange-400"> {{ stats.high }}</span> ·
+            <span class="text-yellow-400"> {{ stats.medium }}</span> ·
+            <span class="text-emerald-400"> {{ stats.low }}</span>
+          </div>
+          <div class="text-[11px] text-slate-400 mt-1">
+            超时 <span class="text-red-400 font-semibold">{{ stats.overdue }}</span> ·
+            督导标记 <span class="text-purple-400 font-semibold">{{ stats.flagged }}</span>
+          </div>
+        </div>
+        <div class="bg-slate-900/70 backdrop-blur px-2.5 py-1.5 rounded-lg border border-slate-700 w-72 flex items-center gap-2">
+          <span class="text-slate-400 text-xs">🔍</span>
+          <input
+            v-model="locateInput"
+            class="flex-1 bg-transparent text-xs text-white placeholder-slate-500 outline-none"
+            placeholder="定位跳转：G001 / EVT_xxx / 网格名 / 事件名 / 地址"
+            @keyup.enter="onLocateEnter"
+            data-testid="locate-input"
+          />
+          <button
+            class="text-[11px] px-2 py-0.5 rounded bg-blue-600 hover:bg-blue-500 text-white transition"
+            @click="onLocateEnter"
+          >定位</button>
+          <button
+            class="text-[11px] px-2 py-0.5 rounded border transition"
+            :class="[
+              store.urlState.showHistory
+                ? 'bg-amber-600 border-amber-500 text-white'
+                : 'bg-slate-800 border-slate-600 text-slate-300 hover:bg-slate-700'
+            ]"
+            @click="store.setShowHistory(!store.urlState.showHistory)"
+            data-testid="toggle-history"
+          >📜 {{ store.navigationHistory.length }}</button>
+        </div>
+        <div
+          v-if="lastLocateResult && lastLocateResult.reason"
+          class="max-w-[420px] px-3 py-2 rounded-lg text-[11px] border backdrop-blur"
           :class="[
-            store.urlState.viewMode === vm.value
-              ? 'bg-blue-600 border-blue-500 text-white'
-              : 'bg-slate-800/80 border-slate-600 text-slate-300 hover:bg-slate-700'
+            lastLocateResult.success
+              ? 'bg-emerald-950/60 border-emerald-800 text-emerald-200'
+              : 'bg-red-950/60 border-red-900 text-red-200'
           ]"
-          @click="store.setViewMode(vm.value)"
-        >{{ vm.label }}</button>
-        <button
-          class="px-2 py-1 text-xs rounded-md border bg-slate-800/80 border-slate-600 text-slate-300 hover:bg-slate-700 transition"
-          @click="store.setFullscreen(!store.urlState.fullscreen)"
-          data-testid="toggle-fullscreen"
-        >{{ store.urlState.fullscreen ? '退出全屏' : '全屏' }}</button>
+          data-testid="locate-result-toast"
+        >{{ lastLocateResult.reason }}</div>
+      </div>
+      <div class="flex flex-col gap-2 items-end pointer-events-auto">
+        <div class="flex gap-2">
+          <button
+            v-for="vm in viewModes"
+            :key="vm.value"
+            class="px-2 py-1 text-xs rounded-md border transition"
+            :class="[
+              store.urlState.viewMode === vm.value
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'bg-slate-800/80 border-slate-600 text-slate-300 hover:bg-slate-700'
+            ]"
+            @click="store.setViewMode(vm.value)"
+          >{{ vm.label }}</button>
+          <button
+            class="px-2 py-1 text-xs rounded-md border bg-slate-800/80 border-slate-600 text-slate-300 hover:bg-slate-700 transition"
+            @click="store.setFullscreen(!store.urlState.fullscreen)"
+            data-testid="toggle-fullscreen"
+          >{{ store.urlState.fullscreen ? '退出全屏' : '全屏' }}</button>
+        </div>
       </div>
     </div>
 
@@ -216,15 +332,75 @@
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useMainStore } from '@/stores/main'
-import type { GridInfo, GridEvent, EventSeverity } from '@/types'
+import type { GridInfo, GridEvent, EventSeverity, LocateResult, NavigationHistoryRecord } from '@/types'
 import { SEVERITY_COLORS, SEVERITY_ORDER, CLOSED_STATUSES } from '@/types'
 import { isOverdue, stablePrioritySort, computeGridHeatIntensity } from '@/services/sorting'
 
 const store = useMainStore()
 const svgEl = ref<SVGSVGElement | null>(null)
 const transformOrigin = '50% 50%'
+const locateInput = ref('')
+const lastLocateResult = ref<LocateResult | null>(null)
+
+watch(
+  () => store.urlState.locateKeyword,
+  (v) => {
+    if (v !== undefined && locateInput.value !== v) {
+      locateInput.value = v
+    }
+  },
+  { immediate: true }
+)
+
+function onLocateEnter() {
+  const result = store.locateTarget(locateInput.value, 'manual')
+  lastLocateResult.value = result
+  setTimeout(() => {
+    if (lastLocateResult.value === result) {
+      lastLocateResult.value = null
+    }
+  }, 8000)
+}
+
+function onHistoryClick(recordId: string) {
+  const result = store.jumpToHistory(recordId)
+  lastLocateResult.value = result
+  setTimeout(() => {
+    if (lastLocateResult.value === result) {
+      lastLocateResult.value = null
+    }
+  }, 6000)
+}
+
+function triggerLabel(t: NavigationHistoryRecord['trigger']): string {
+  const map: Record<NavigationHistoryRecord['trigger'], string> = {
+    manual: '手动定位',
+    event_create: '任务新建',
+    event_query: '流程复查',
+    grid_select: '网格点选',
+    review_reopen: '复核重开'
+  }
+  return map[t] || t
+}
+
+function triggerBadgeClass(t: NavigationHistoryRecord['trigger']): string {
+  const map: Record<NavigationHistoryRecord['trigger'], string> = {
+    manual: 'bg-slate-700 text-slate-200 border border-slate-600',
+    event_create: 'bg-indigo-900/70 text-indigo-200 border border-indigo-800',
+    event_query: 'bg-emerald-900/60 text-emerald-200 border border-emerald-800',
+    grid_select: 'bg-cyan-900/60 text-cyan-200 border border-cyan-800',
+    review_reopen: 'bg-amber-900/60 text-amber-200 border border-amber-800'
+  }
+  return map[t] || map.manual
+}
+
+function formatTime(ts: number): string {
+  const d = new Date(ts)
+  const pad = (n: number) => n.toString().padStart(2, '0')
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
+}
 
 const CANVAS_W = 1000
 const CANVAS_H = 800
@@ -374,5 +550,29 @@ function onEventClick(id: string) {
 .marker-selected circle:first-child {
   stroke-width: 3;
   stroke: #fbbf24;
+}
+.pulse-dot {
+  animation: pulseRing 1.6s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  transform-origin: center;
+}
+@keyframes pulseRing {
+  0%,
+  100% {
+    opacity: 0.75;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.25;
+    transform: scale(1.25);
+  }
+}
+.slide-up-enter-active,
+.slide-up-leave-active {
+  transition: all 0.3s ease;
+}
+.slide-up-enter-from,
+.slide-up-leave-to {
+  opacity: 0;
+  transform: translateY(24px);
 }
 </style>

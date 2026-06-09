@@ -11,7 +11,10 @@ import type {
   PatrolRoute,
   DraftDisposal,
   ActionType,
-  StateTransition
+  StateTransition,
+  LocateResult,
+  LocateTargetType,
+  NavigationHistoryRecord
 } from '@/types'
 import { GRIDS, USERS, EVENTS, getUserById, getRoutesForEvent, getGridById } from '@/data/seed'
 import { stablePrioritySort, isOverdue } from '@/services/sorting'
@@ -36,7 +39,10 @@ import {
   updateBrowserURL,
   exportAuditLogsAsCSV,
   triggerCSVDownload,
-  loadInitialState
+  loadInitialState,
+  appendNavHistory,
+  restoreNavHistory,
+  clearNavHistory
 } from '@/services/persistence'
 
 export const useMainStore = defineStore('main', () => {
@@ -47,6 +53,7 @@ export const useMainStore = defineStore('main', () => {
 
   const urlState = ref<URLState>({ ...DEFAULT_URL_STATE })
   const allAuditLogs = ref<AuditLogEntry[]>([])
+  const navigationHistory = ref<NavigationHistoryRecord[]>([])
 
   watch(urlState, () => persistState(), { deep: true })
 
@@ -177,6 +184,253 @@ export const useMainStore = defineStore('main', () => {
     persistState()
   }
 
+  function setLocateKeyword(kw: string) {
+    urlState.value.locateKeyword = kw
+    persistState()
+  }
+
+  function setShowHistory(show: boolean) {
+    urlState.value.showHistory = show
+    persistState()
+  }
+
+  function locateTarget(keyword: string, trigger: NavigationHistoryRecord['trigger'] = 'manual'): LocateResult {
+    const k = (keyword || '').trim()
+    if (!k) {
+      const result: LocateResult = { success: false, reason: '请输入要定位的网格编号、事件编号、名称或关键词' }
+      showError(result.reason!)
+      return result
+    }
+
+    const lowerK = k.toLowerCase()
+    let targetType: LocateTargetType | undefined
+    let targetId: string | undefined
+    let targetName: string | undefined
+    let gridId: string | undefined
+    let gridName: string | undefined
+    let cx: number | undefined
+    let cy: number | undefined
+    let zoom: number = urlState.value.mapZoom
+
+    const exactEvent = events.value.find((e) => e.id.toLowerCase() === lowerK)
+    if (exactEvent) {
+      targetType = 'event'
+      targetId = exactEvent.id
+      targetName = exactEvent.title
+      gridId = exactEvent.gridId
+      gridName = exactEvent.gridName
+      cx = exactEvent.location.x
+      cy = exactEvent.location.y
+      zoom = 1.6
+    }
+
+    if (!targetType) {
+      const exactGrid = grids.value.find(
+        (g) => g.id.toLowerCase() === lowerK || g.name === k || g.area === k
+      )
+      if (exactGrid) {
+        targetType = 'grid'
+        targetId = exactGrid.id
+        targetName = exactGrid.name
+        gridId = exactGrid.id
+        gridName = exactGrid.name
+        cx = exactGrid.centerX
+        cy = exactGrid.centerY
+        zoom = 1.4
+      }
+    }
+
+    if (!targetType) {
+      const matchEvent = events.value.find(
+        (e) =>
+          e.title.toLowerCase().includes(lowerK) ||
+          e.address.toLowerCase().includes(lowerK) ||
+          e.description.toLowerCase().includes(lowerK) ||
+          (e.assigneeName && e.assigneeName.includes(k))
+      )
+      if (matchEvent) {
+        targetType = 'event'
+        targetId = matchEvent.id
+        targetName = matchEvent.title
+        gridId = matchEvent.gridId
+        gridName = matchEvent.gridName
+        cx = matchEvent.location.x
+        cy = matchEvent.location.y
+        zoom = 1.6
+      }
+    }
+
+    if (!targetType) {
+      const matchGrid = grids.value.find(
+        (g) => g.name.includes(k) || g.area.includes(k) || g.id.toLowerCase().includes(lowerK)
+      )
+      if (matchGrid) {
+        targetType = 'grid'
+        targetId = matchGrid.id
+        targetName = matchGrid.name
+        gridId = matchGrid.id
+        gridName = matchGrid.name
+        cx = matchGrid.centerX
+        cy = matchGrid.centerY
+        zoom = 1.4
+      }
+    }
+
+    if (!targetType || !cx || !cy || !gridId) {
+      const result: LocateResult = {
+        success: false,
+        reason: `未找到与「${k}」匹配的网格或事件。请尝试：网格编号(G001~G006)、事件编号(EVT_xxx)、网格名称、事件标题、地址等关键词。`
+      }
+      showError(result.reason!)
+      return result
+    }
+
+    urlState.value.mapCenter = { x: cx, y: cy }
+    urlState.value.mapZoom = zoom
+    setLocateKeyword(k)
+
+    let reviewReason: string | undefined
+    let reviewable = false
+    if (targetType === 'event' && targetId) {
+      const ev = events.value.find((e) => e.id === targetId)
+      if (ev) {
+        const closedOrRejected = ev.status === 'closed' || ev.status === 'rejected'
+        const hasDisposal = !!ev.disposalRecord
+        const hasAuditTrail = ev.auditLog.length >= 3
+        reviewable = closedOrRejected && hasDisposal && hasAuditTrail
+        if (reviewable) {
+          reviewReason = `新增流程可被查询并复查：事件「${ev.title}」状态为${
+            ev.status === 'closed' ? '已结案' : '已驳回'
+          }，已完成${ev.auditLog.length}步流转，含处置记录，版本号v${ev.version}，满足可复查条件（closed/rejected + 处置回填 + 审计链完整）。`
+        } else {
+          const missing: string[] = []
+          if (!closedOrRejected) missing.push('终态(已结案/已驳回)')
+          if (!hasDisposal) missing.push('处置回填记录')
+          if (!hasAuditTrail) missing.push('完整审计链(≥3步)')
+          reviewReason = `当前暂不满足可复查：缺少${missing.join('、')}。`
+        }
+        selectEvent(targetId)
+      }
+    }
+
+    const record: NavigationHistoryRecord = {
+      id: 'nav_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      timestamp: Date.now(),
+      operatorId: currentUser.value.id,
+      operatorName: currentUser.value.name,
+      trigger,
+      targetType: targetType!,
+      targetId: targetId!,
+      targetName: targetName || '',
+      gridId: gridId!,
+      gridName: gridName || '',
+      centerX: cx!,
+      centerY: cy!,
+      zoom,
+      queryKeyword: k,
+      reviewable,
+      reviewReason
+    }
+
+    navigationHistory.value.unshift(record)
+    appendNavHistory(record)
+    if (navigationHistory.value.length > 200) navigationHistory.value.length = 200
+
+    const successTip = reviewable
+      ? `定位成功：${targetName}（${targetId}）- ${reviewReason}`
+      : `定位成功：${targetName}（${targetId}）- 已跳转到 ${gridName} 区域`
+    showSuccess(successTip)
+
+    return {
+      success: true,
+      targetType,
+      targetId,
+      targetName,
+      gridId,
+      centerX: cx,
+      centerY: cy,
+      zoom,
+      reason: reviewReason || `已定位到 ${targetName}`
+    }
+  }
+
+  function jumpToHistory(recordId: string): LocateResult {
+    const rec = navigationHistory.value.find((r) => r.id === recordId)
+    if (!rec) {
+      const result: LocateResult = { success: false, reason: '历史记录不存在' }
+      showError(result.reason!)
+      return result
+    }
+    urlState.value.mapCenter = { x: rec.centerX, y: rec.centerY }
+    urlState.value.mapZoom = rec.zoom
+    if (rec.targetType === 'event') {
+      selectEvent(rec.targetId)
+    }
+    showSuccess(`已跳转至历史记录：${rec.targetName}（${rec.gridName}）`)
+    return {
+      success: true,
+      targetType: rec.targetType,
+      targetId: rec.targetId,
+      targetName: rec.targetName,
+      gridId: rec.gridId,
+      centerX: rec.centerX,
+      centerY: rec.centerY,
+      zoom: rec.zoom,
+      reason: rec.reviewReason
+    }
+  }
+
+  function clearNavigationHistory() {
+    navigationHistory.value = []
+    clearNavHistory()
+    showSuccess('导航历史已清空')
+  }
+
+  function pushNavHistoryForEvent(
+    ev: GridEvent,
+    trigger: NavigationHistoryRecord['trigger'],
+    extraReason?: string
+  ) {
+    const grid = grids.value.find((g) => g.id === ev.gridId)
+    if (!grid) return
+    const reviewable =
+      (ev.status === 'closed' || ev.status === 'rejected') &&
+      !!ev.disposalRecord &&
+      ev.auditLog.length >= 3
+    let reviewReason: string | undefined
+    if (reviewable) {
+      reviewReason =
+        extraReason ||
+        `新增流程可被查询并复查：事件「${ev.title}」状态为${
+          ev.status === 'closed' ? '已结案' : '已驳回'
+        }，已完成${ev.auditLog.length}步流转，含处置记录，版本号v${ev.version}，满足可复查条件（closed/rejected + 处置回填 + 审计链完整）。`
+    }
+    const record: NavigationHistoryRecord = {
+      id: 'nav_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      timestamp: Date.now(),
+      operatorId: currentUser.value.id,
+      operatorName: currentUser.value.name,
+      trigger,
+      targetType: 'event',
+      targetId: ev.id,
+      targetName: ev.title,
+      gridId: grid.id,
+      gridName: grid.name,
+      centerX: ev.location.x,
+      centerY: ev.location.y,
+      zoom: urlState.value.mapZoom,
+      reviewable,
+      reviewReason
+    }
+    navigationHistory.value.unshift(record)
+    appendNavHistory(record)
+    if (navigationHistory.value.length > 200) navigationHistory.value.length = 200
+  }
+
+  function loadNavigationHistoryFromStorage() {
+    navigationHistory.value = restoreNavHistory()
+  }
+
   function persistState() {
     saveToLocalStorage(urlState.value)
     try {
@@ -259,6 +513,7 @@ export const useMainStore = defineStore('main', () => {
     appendAuditLog(audit)
     allAuditLogs.value.unshift(audit)
     addEventToMemory(newEv)
+    pushNavHistoryForEvent(newEv, 'event_create', `新增布控流程可被查询：事件「${newEv.title}」已创建，编号${newEv.id}，位于${grid.name}，当前状态待研判，创建人${operator.name}，版本号v${newEv.version}。`)
     showSuccess('布控任务已创建，进入待研判')
     selectEvent(newEv.id)
     return newEv
@@ -411,6 +666,11 @@ export const useMainStore = defineStore('main', () => {
     allAuditLogs.value.unshift(audit)
 
     replaceEvent(copy)
+    if (action === 'review_approve' || action === 'review_reject' || action === 'reopen') {
+      const trig =
+        action === 'reopen' ? 'review_reopen' : 'event_query'
+      pushNavHistoryForEvent(copy, trig)
+    }
     showSuccess(`操作成功：${v.transition?.label || action}`)
     persistState()
     return { ok: true }
@@ -508,6 +768,7 @@ export const useMainStore = defineStore('main', () => {
     } catch {
       // no-op
     }
+    loadNavigationHistoryFromStorage()
   }
 
   function canRoleDo(action: ActionType, status: GridEvent['status']): boolean {
@@ -546,6 +807,7 @@ export const useMainStore = defineStore('main', () => {
     currentUser,
     urlState,
     allAuditLogs,
+    navigationHistory,
     lastError,
     lastSuccess,
     toastId,
@@ -565,6 +827,13 @@ export const useMainStore = defineStore('main', () => {
     setMapZoom,
     setMapCenter,
     setViewMode,
+    setLocateKeyword,
+    setShowHistory,
+    locateTarget,
+    jumpToHistory,
+    clearNavigationHistory,
+    pushNavHistoryForEvent,
+    loadNavigationHistoryFromStorage,
     createTask,
     dispatchTask,
     acceptTask,

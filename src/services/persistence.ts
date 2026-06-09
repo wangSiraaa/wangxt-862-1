@@ -1,8 +1,9 @@
-import type { URLState, FilterState, UserRole, AuditLogEntry, DraftDisposal } from '@/types'
+import type { URLState, FilterState, UserRole, AuditLogEntry, DraftDisposal, NavigationHistoryRecord } from '@/types'
 
 const URL_STATE_KEY = 'gch_url_state'
 const DRAFT_KEY_PREFIX = 'gch_draft_'
 const AUDIT_LOG_KEY = 'gch_audit_log'
+const NAV_HISTORY_KEY = 'gch_nav_history'
 const STATE_VERSION = 1
 
 export const DEFAULT_FILTERS: FilterState = {
@@ -23,7 +24,9 @@ export const DEFAULT_URL_STATE: URLState = {
   mapZoom: 1,
   mapCenter: { x: 500, y: 400 },
   fullscreen: false,
-  viewMode: 'hybrid'
+  viewMode: 'hybrid',
+  locateKeyword: '',
+  showHistory: false
 }
 
 // =============== Base64URL ===============
@@ -90,6 +93,8 @@ export function updateBrowserURL(state: URLState) {
   if (state.selectedEventId) params.set('eid', state.selectedEventId)
   if (state.selectedRouteId) params.set('rid', state.selectedRouteId)
   if (state.draftEventId) params.set('did', state.draftEventId)
+  if (state.locateKeyword) params.set('lk', state.locateKeyword)
+  if (state.showHistory) params.set('sh', '1')
 
   const fChanged =
     JSON.stringify(state.filters) !== JSON.stringify(DEFAULT_FILTERS)
@@ -144,6 +149,10 @@ export function parseURLState(): { state: Partial<URLState>; hasURL: boolean } {
     if (rid) partial.selectedRouteId = rid
     const did = params.get('did')
     if (did) partial.draftEventId = did
+    const lk = params.get('lk')
+    if (lk) partial.locateKeyword = lk
+    const sh = params.get('sh')
+    if (sh) partial.showHistory = sh === '1'
     const filters = parseFiltersFromURL(params)
     if (filters) partial.filters = filters
     return { state: partial, hasURL: true }
@@ -294,6 +303,29 @@ export function loadInitialState(): { state: URLState; restoreAudit: AuditLogEnt
   }
 
   return { state: base, restoreAudit }
+}
+
+// =============== 导航历史（localStorage 存档） ===============
+export function appendNavHistory(record: NavigationHistoryRecord) {
+  const list = restoreNavHistory()
+  list.unshift(record)
+  const trimmed = list.slice(0, 200)
+  safeLSSet(NAV_HISTORY_KEY, JSON.stringify(trimmed))
+}
+
+export function restoreNavHistory(): NavigationHistoryRecord[] {
+  const raw = safeLSGet(NAV_HISTORY_KEY)
+  if (!raw) return []
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr) ? (arr as NavigationHistoryRecord[]) : []
+  } catch {
+    return []
+  }
+}
+
+export function clearNavHistory() {
+  safeLSRemove(NAV_HISTORY_KEY)
 }
 
 // =============== CSV 导出 ===============

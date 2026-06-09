@@ -213,6 +213,8 @@ export interface URLState {
   selectedRouteId?: string
   draftEventId?: string
   viewMode: 'heatmap' | 'grid' | 'hybrid'
+  locateKeyword?: string
+  showHistory?: boolean
 }
 
 export interface DraftDisposal {
@@ -243,4 +245,37 @@ export interface StateTransition {
   allowedRoles: UserRole[]
   label: string
   description: string
+}
+
+export type LocateTargetType = 'grid' | 'event'
+
+export interface LocateResult {
+  success: boolean
+  reason?: string
+  targetType?: LocateTargetType
+  targetId?: string
+  targetName?: string
+  gridId?: string
+  centerX?: number
+  centerY?: number
+  zoom?: number
+}
+
+export interface NavigationHistoryRecord {
+  id: string
+  timestamp: number
+  operatorId: string
+  operatorName: string
+  trigger: 'manual' | 'event_create' | 'event_query' | 'grid_select' | 'review_reopen'
+  targetType: LocateTargetType
+  targetId: string
+  targetName: string
+  gridId: string
+  gridName: string
+  centerX: number
+  centerY: number
+  zoom: number
+  queryKeyword?: string
+  reviewable?: boolean
+  reviewReason?: string
 }
