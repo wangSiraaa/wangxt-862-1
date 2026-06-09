@@ -1,0 +1,18 @@
+services:
+  grid-heatmap:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: grid-control-heatmap:1.0
+    container_name: grid-control-heatmap
+    ports:
+      - "9528:9528"
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped
+    networks:
+      - grid-net
+
+networks:
+  grid-net:
+    driver: bridge
